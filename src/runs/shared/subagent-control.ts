@@ -190,7 +190,8 @@ export function shouldNotifyControlEvent(config: ResolvedControlConfig, event: C
 export function controlNotificationKey(event: ControlEvent, childIntercomTarget?: string): string {
 	const childKey = childIntercomTarget ?? (event.index !== undefined ? `${event.runId}:${event.index}` : event.runId);
 	const contextHash = createHash("sha256").update(formatControlNudge(event)).digest("hex").slice(0, 8);
-	return `${childKey}:${event.type}:${event.reason ?? "idle"}:${contextHash}`;
+	const callKey = event.reason === "tool_open_threshold" && event.toolCallId ? `:${event.toolCallId}` : "";
+	return `${childKey}:${event.type}:${event.reason ?? "idle"}${callKey}:${contextHash}`;
 }
 
 export function claimControlNotification(config: ResolvedControlConfig, event: ControlEvent, seenKeys: Set<string>, childIntercomTarget?: string): boolean {
@@ -241,6 +242,25 @@ export function formatControlNoticeMessage(event: ControlEvent, childIntercomTar
 			childIntercomTarget ? `Direct intercom target: ${childIntercomTarget}` : undefined,
 			`Status: subagent({ action: "status", id: "${runTarget}" })`,
 			`Interrupt: subagent({ action: "interrupt", id: "${runTarget}" })`,
+		].filter((line): line is string => Boolean(line)).join("\n");
+	}
+
+	if (event.reason === "tool_open_threshold" && event.currentTool === "bash") {
+		const facts = formatLongRunningFacts(event);
+		return [
+			`Subagent needs attention: ${event.agent}`,
+			`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
+			`Signal: ${event.message}`,
+			facts ? `Facts: ${facts}` : undefined,
+			"Hint: Inspect the running command and recent output before nudging. A queued steer does not cancel an in-flight bash call. A dev server or watch command may intentionally never return. Elapsed time alone does not prove the command is stuck.",
+			"Recovery: For a local Pi child, yield a needed persistent command or cancel the exact incorrect command, then steer the child. Query command.status to confirm the result. If command controls are unavailable, inspect partial changes and interruption scope before interrupt/resume; interrupt is run-scoped and may affect siblings.",
+			...(event.toolCallId ? [
+				`Command: subagent(${JSON.stringify({ action: "command.status", id: runTarget, ...(event.index !== undefined ? { index: event.index } : {}), toolCallId: event.toolCallId })})`,
+				`Yield: subagent(${JSON.stringify({ action: "command.yield", id: runTarget, ...(event.index !== undefined ? { index: event.index } : {}), toolCallId: event.toolCallId })})`,
+				`Cancel: subagent(${JSON.stringify({ action: "command.cancel", id: runTarget, ...(event.index !== undefined ? { index: event.index } : {}), toolCallId: event.toolCallId })})`,
+			] : []),
+			`Status: subagent({ action: "status", id: "${runTarget}" })`,
+			`Transcript: subagent({ action: "status", id: "${runTarget}", view: "transcript"${event.index !== undefined ? `, index: ${event.index}` : ""} })`,
 		].filter((line): line is string => Boolean(line)).join("\n");
 	}
 
