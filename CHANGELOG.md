@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Long-open `bash` attention notices now guide the parent to inspect the command and child transcript, distinguish persistent servers/watch tasks from blocked commands, and check interruption scope before pausing and resuming work.
+
 ## [0.74.0] - 2026-09-30
 
 ### Highlights

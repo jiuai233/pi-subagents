@@ -244,6 +244,20 @@ export function formatControlNoticeMessage(event: ControlEvent, childIntercomTar
 		].filter((line): line is string => Boolean(line)).join("\n");
 	}
 
+	if (event.reason === "tool_open_threshold" && event.currentTool === "bash") {
+		const facts = formatLongRunningFacts(event);
+		return [
+			`Subagent needs attention: ${event.agent}`,
+			`Run: ${runTarget}${event.index !== undefined ? ` step ${event.index + 1}` : ""}`,
+			`Signal: ${event.message}`,
+			facts ? `Facts: ${facts}` : undefined,
+			"Hint: Inspect the running command and recent output before nudging. A queued steer does not cancel an in-flight bash call. A dev server or watch command may intentionally never return. Elapsed time alone does not prove the command is stuck.",
+			"Recovery: If the command is confirmed blocked or incorrectly waiting on a persistent service, check partial changes and interruption scope, interrupt the affected run, confirm it is paused, then resume the selected child with corrected execution instructions. Interrupt is run-scoped and may affect siblings.",
+			`Status: subagent({ action: "status", id: "${runTarget}" })`,
+			`Transcript: subagent({ action: "status", id: "${runTarget}", view: "transcript"${event.index !== undefined ? `, index: ${event.index}` : ""} })`,
+		].filter((line): line is string => Boolean(line)).join("\n");
+	}
+
 	const supervisorHint = event.reason === "supervisor_request"
 		? "Supervisor request: reply to the pending request. If subagent_supervisor pending is empty, check intercom pending because an external intercom tool may own the request."
 		: undefined;
