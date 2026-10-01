@@ -18,7 +18,11 @@ async function until(predicate: () => boolean, diagnostic?: () => unknown) {
 function processAlive(pid: number) { try { process.kill(pid, 0); return true; } catch { return false; } }
 function serviceCommand(pidFile: string) {
 	const script = `${pidFile}.cjs`;
-	fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); console.log('ready'); setInterval(() => {}, 1000);`);
+	const temporary = `${pidFile}.pending`;
+	const publication = process.env.PI_DIAG_ATOMIC_PID === "1"
+		? `fs.writeFileSync(${JSON.stringify(temporary)}, String(process.pid)); fs.renameSync(${JSON.stringify(temporary)}, ${JSON.stringify(pidFile)});`
+		: `const fd = fs.openSync(${JSON.stringify(pidFile)}, 'w'); ${process.env.PI_DIAG_PUBLICATION_DELAY === "1" ? "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);" : ""} fs.writeSync(fd, String(process.pid)); fs.closeSync(fd);`;
+	fs.writeFileSync(script, `const fs = require('fs'); ${publication} console.log('ready'); setInterval(() => {}, 1000);`);
 	return `${JSON.stringify(process.execPath.replaceAll("\\", "/"))} ${JSON.stringify(script.replaceAll("\\", "/"))}`;
 }
 
@@ -47,7 +51,7 @@ describe("child commands using Pi's real bash backend", () => {
 			assert.equal(commands.operate("status", "second").commands[0].state, "yielded");
 			await controlChildCommand(dir, "cancel", "second");
 			await commands.shutdown();
-			await until(() => !processAlive(pid2));
+			await until(() => !processAlive(pid2), () => ({ observedPid: pid2, pidFile: fs.readFileSync(secondPid, "utf8"), actualPidAlive: processAlive(Number(fs.readFileSync(secondPid, "utf8"))), commands: commands.state() }));
 			assert.equal(readChildCommandState(dir)?.closed, true);
 		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
 	});

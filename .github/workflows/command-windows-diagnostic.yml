@@ -1,0 +1,38 @@
+name: Owned command Windows diagnostic
+on:
+  push:
+    branches: [diag/child-command-windows]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Baseline under a delayed PID publication
+        shell: pwsh
+        run: |
+          $env:PI_DIAG_PUBLICATION_DELAY = '1'
+          node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test --test-name-pattern="yields a live process" test/unit/child-commands.test.ts
+          if ($LASTEXITCODE -eq 0) { throw 'Expected baseline publication race to fail' }
+          exit 0
+      - name: Atomic publication repeated 30 times
+        shell: pwsh
+        run: |
+          $env:PI_DIAG_PUBLICATION_DELAY = '1'
+          $env:PI_DIAG_ATOMIC_PID = '1'
+          for ($i = 1; $i -le 30; $i++) {
+            Write-Host "Atomic iteration $i"
+            node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test --test-name-pattern="yields a live process" test/unit/child-commands.test.ts
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: All real command tests
+        shell: pwsh
+        env:
+          PI_DIAG_ATOMIC_PID: '1'
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/child-commands.test.ts
