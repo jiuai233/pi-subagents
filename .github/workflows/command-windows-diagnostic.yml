@@ -17,6 +17,8 @@ jobs:
       - name: Exact command and factory fixtures repeated ten times
         shell: pwsh
         run: |
+          $env:PI_SUBAGENTS_TEMP_ROOT = Join-Path $env:RUNNER_TEMP "pi-command-repeat-root"
+          New-Item -ItemType Directory -Force $env:PI_SUBAGENTS_TEMP_ROOT | Out-Null
           for ($i = 1; $i -le 10; $i++) {
             Write-Host "Full fixture iteration $i"
             node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/child-commands.test.ts test/unit/child-session-commands.test.ts test/unit/child-tool-plan.test.ts
