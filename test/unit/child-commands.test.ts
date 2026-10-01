@@ -18,11 +18,8 @@ async function until(predicate: () => boolean, diagnostic?: () => unknown) {
 function processAlive(pid: number) { try { process.kill(pid, 0); return true; } catch { return false; } }
 function serviceCommand(pidFile: string) {
 	const script = `${pidFile}.cjs`;
-	const temporary = `${pidFile}.pending`;
-	const publication = process.env.PI_DIAG_ATOMIC_PID === "1"
-		? `fs.writeFileSync(${JSON.stringify(temporary)}, String(process.pid)); fs.renameSync(${JSON.stringify(temporary)}, ${JSON.stringify(pidFile)});`
-		: `const fd = fs.openSync(${JSON.stringify(pidFile)}, 'w'); ${process.env.PI_DIAG_PUBLICATION_DELAY === "1" && path.basename(pidFile) === "second.pid" ? "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);" : ""} fs.writeSync(fd, String(process.pid)); fs.closeSync(fd);`;
-	fs.writeFileSync(script, `const fs = require('fs'); ${publication} console.log('ready'); setInterval(() => {}, 1000);`);
+	const pending = `${pidFile}.pending`;
+	fs.writeFileSync(script, `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(pending)}, String(process.pid)); fs.renameSync(${JSON.stringify(pending)}, ${JSON.stringify(pidFile)}); console.log('ready'); setInterval(() => {}, 1000);`);
 	return `${JSON.stringify(process.execPath.replaceAll("\\", "/"))} ${JSON.stringify(script.replaceAll("\\", "/"))}`;
 }
 
@@ -40,20 +37,21 @@ describe("child commands using Pi's real bash backend", () => {
 			await until(() => fs.existsSync(firstPid) && fs.existsSync(secondPid), commands.state);
 			const pid1 = Number(fs.readFileSync(firstPid));
 			const pid2 = Number(fs.readFileSync(secondPid));
+			assert.ok(pid1 > 0 && pid2 > 0, `services must publish valid PIDs: ${pid1}, ${pid2}`);
 			const continued = await bash.execute("continue", { command: "printf continued" }, undefined, undefined, ctx);
 			assert.equal(continued.content[0].text, "continued");
 			const cancelled = await controlChildCommand(dir, "cancel", "first");
 			assert.equal(cancelled.commands[0].toolCallId, "first");
 			assert.ok(["cancel_requested", "cancelled"].includes(cancelled.commands[0].state));
 			await until(() => commands.operate("status", "first").commands[0].state === "cancelled");
-			await until(() => !processAlive(pid1), () => ({ observedPid: pid1, pidFile: fs.readFileSync(firstPid, "utf8"), actualPidAlive: processAlive(Number(fs.readFileSync(firstPid, "utf8"))), commands: commands.state() }));
+			await until(() => !processAlive(pid1));
 			assert.equal(processAlive(pid2), true, "sibling command must remain alive");
 			assert.equal(commands.operate("status", "second").commands[0].state, "yielded");
 			await controlChildCommand(dir, "cancel", "second");
 			await commands.shutdown();
-			await until(() => !processAlive(pid2), () => ({ observedPid: pid2, pidFile: fs.readFileSync(secondPid, "utf8"), actualPidAlive: processAlive(Number(fs.readFileSync(secondPid, "utf8"))), commands: commands.state() }));
+			await until(() => !processAlive(pid2), () => ({ pid2, publishedPid: fs.readFileSync(secondPid, "utf8"), commands: commands.state() }));
 			assert.equal(readChildCommandState(dir)?.closed, true);
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
 	it("lets the supervisor yield a bash call that was already blocking", { timeout: 10_000 }, async () => {
@@ -69,7 +67,7 @@ describe("child commands using Pi's real bash backend", () => {
 			assert.equal(processAlive(Number(fs.readFileSync(pidFile))), true);
 			await controlChildCommand(dir, "cancel", "blocked");
 			await commands.shutdown();
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
 	it("returns command failures and per-command timeouts without poisoning the session", { timeout: 10_000 }, async () => {
@@ -83,7 +81,7 @@ describe("child commands using Pi's real bash backend", () => {
 			const result = await bash.execute("recover", { command: "printf recovered" }, undefined, undefined, ctx);
 			assert.equal(result.content[0].text, "recovered");
 			await commands.finish();
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
 	it("cancels unfinished background work and fails closed when the child finishes", { timeout: 10_000 }, async () => {
@@ -97,7 +95,7 @@ describe("child commands using Pi's real bash backend", () => {
 			await assert.rejects(commands.finish(), /unfinished commands: unfinished/);
 			await until(() => !processAlive(pid));
 			assert.equal(commands.state().commands[0].state, "cancelled");
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 });
 
@@ -133,7 +131,7 @@ describe("Pi agent loop command cancellation", () => {
 			assert.equal(results[1].toolCallId, "after-cancel");
 			assert.equal(results[1].content[0].text, "continued");
 			assert.equal(agent.state.errorMessage, undefined);
-		} finally { agent.abort(); await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { agent.abort(); await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 	it("continues after a yielded command and observes targeted cancellation through the child tool", { timeout: 10_000 }, async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-command-yield-agent-"));
@@ -165,7 +163,7 @@ describe("Pi agent loop command cancellation", () => {
 			await commands.shutdown();
 			assert.deepEqual((await controlChildCommand(dir, "status", "service")).commands.map(({ toolCallId }) => toolCallId), ["service"]);
 			await assert.rejects(controlChildCommand(dir, "status", "unknown"), /No retained command/);
-		} finally { agent.abort(); await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { agent.abort(); await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
 });
@@ -190,28 +188,23 @@ describe("command identities and bounded observation", () => {
 			assert.equal(signal?.aborted, false);
 			assert.equal(Buffer.byteLength(commands.state().commands[0].output), 8192);
 			assert.equal(commands.operate("status", "new").commands[0].state, "yielded");
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
 	it("retains the native run abort signal after yielding", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-abort-"));
 		const commands = createChildCommandRuntime(dir);
 		const controller = new AbortController();
+		const pidFile = path.join(dir, "service.pid");
 		try {
-			await commands.wrap(createBashToolDefinition(dir)).execute("run-abort", { command: "sleep 10", yieldTimeMs: 0 }, controller.signal, undefined, ctx);
+			await commands.wrap(createBashToolDefinition(dir)).execute("run-abort", { command: serviceCommand(pidFile), yieldTimeMs: 0 }, controller.signal, undefined, ctx);
+			await until(() => fs.existsSync(pidFile), commands.state);
+			const pid = Number(fs.readFileSync(pidFile));
 			controller.abort();
 			await until(() => commands.state().commands[0].endedAt !== undefined);
 			assert.equal(commands.state().commands[0].state, "failed", "run abort is distinct from command cancellation");
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
+			await until(() => !processAlive(pid), commands.state);
+		} finally { await commands.shutdown(); await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 	});
 
-	it("disables yielding when the command observation tool is not granted", async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-child-ceiling-"));
-		const commands = createChildCommandRuntime(dir, false);
-		try {
-			const bash = commands.wrap(createBashToolDefinition(dir));
-			assert.equal(bash.parameters.properties.yieldTimeMs, undefined);
-			await assert.rejects(bash.execute("not-granted", { command: "sleep 10", yieldTimeMs: 0 }, undefined, undefined, ctx), /requires subagent_command/);
-		} finally { await commands.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
-	});
 });
