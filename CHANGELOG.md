@@ -4,11 +4,11 @@
 
 ### Added
 
-- Local native Pi children support command-scoped `command.status`, `command.yield`, and `command.cancel` supervisor actions. Child `bash` accepts an explicit `yieldTimeMs` and returns a managed command handle; `subagent_command` observes or cancels it. Commands reuse Pi's shell backend, stay owned by the child, and are cleaned up at child exit. Unfinished commands fail completion.
+- Local native Pi children support command-scoped `command.status`, `command.yield`, and `command.cancel` supervisor actions. Child `bash` accepts an explicit `yieldTimeMs` and returns a managed command handle; `subagent_command` observes or cancels it. Commands reuse Pi's shell backend, stay owned by the child, and are cleaned up at child exit. Unfinished commands fail completion. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2598](https://github.com/nicobailon/pi-subagents/pull/2598).
 
 ### Fixed
 
-- Each distinct long-open tool call now emits its own attention notice once, including after an earlier call put the child in `needs_attention`. Open `bash` notices include command status and transcript inspection guidance.
+- Each distinct long-open tool call now emits its own attention notice once, including after an earlier call put the child in `needs_attention`. Open `bash` notices include command status and transcript inspection guidance. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2598](https://github.com/nicobailon/pi-subagents/pull/2598).
 
 ## [0.74.0] - 2026-09-30
 
